@@ -56,13 +56,13 @@
 
   .num {
     position: absolute;
-    font-size: 2.4rem;
+    font-size: 3.4rem;
     font-weight: bold;
     cursor: pointer;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
-    width: 60px;
-    height: 60px;
+    width: 76px;
+    height: 76px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -139,7 +139,7 @@
   function getDur()   { return clamp(parseFloat(tInput.value) || 1.5, 0.1, 60) * 1000; }
 
   function randomPositions(n, w, h) {
-    const pad = 40, margin = 70, positions = [];
+    const pad = 50, margin = 85, positions = [];
     let attempts = 0;
     while (positions.length < n && attempts < 5000) {
       attempts++;
