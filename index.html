@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Number Flash</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #000;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .controls {
+    padding: 14px 16px 10px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-shrink: 0;
+    border-bottom: 1px solid #222;
+    flex-wrap: wrap;
+  }
+
+  .control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: #aaa;
+  }
+
+  input[type=number] {
+    width: 60px;
+    background: #111;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    text-align: center;
+  }
+
+  input[type=number]:focus { outline: 1px solid #888; }
+
+  /* toggle switches for Grid / Arcade */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute;
+    inset: 0;
+    background: #333;
+    border-radius: 999px;
+    transition: background .15s;
+  }
+  .switch .track::before {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    left: 3px;
+    top: 3px;
+    background: #ccc;
+    border-radius: 50%;
+    transition: transform .15s, background .15s;
+  }
+  .switch input:checked + .track { background: #2f6e4a; }
+  .switch input:checked + .track::before { transform: translateX(16px); background: #4ade80; }
+
+  .combo {
+    margin-left: auto;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #facc15;
+    min-width: 34px;
+    text-align: right;
+  }
+
+  .arena {
+    flex: 1;
+    position: relative;
+  }
+
+  .num {
+    position: absolute;
+    font-weight: bold;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translate(-50%, -50%);
+  }
+
+  .num.correct { color: #4ade80; pointer-events: none; }
+  .num.wrong   { color: #f87171; }
+
+  .bottom {
+    padding: 12px 16px 20px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  button {
+    background: #fff;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  button:disabled { background: #333; color: #666; cursor: default; }
+
+  #status { font-size: 0.9rem; color: #aaa; }
+  #status.err { color: #f87171; }
+  #status.ok  { color: #4ade80; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <div class="control">
+    Count:
+    <input type="number" id="cInput" min="3" max="30" value="6">
+  </div>
+  <div class="control">
+    Show time (s):
+    <input type="number" id="tInput" min="0.5" max="10" value="1.5" step="0.25">
+  </div>
+  <div class="control">
+    Grid
+    <label class="switch">
+      <input type="checkbox" id="gridToggle">
+      <span class="track"></span>
+    </label>
+  </div>
+  <div class="control">
+    Arcade
+    <label class="switch">
+      <input type="checkbox" id="arcadeToggle">
+      <span class="track"></span>
+    </label>
+  </div>
+  <div class="combo" id="combo">1x</div>
+</div>
+
+<div class="arena" id="arena"></div>
+
+<div class="bottom">
+  <button id="startBtn">Start</button>
+  <div id="status">Press Start</div>
+</div>
+
+<script>
+  const arena        = document.getElementById('arena');
+  const startBtn      = document.getElementById('startBtn');
+  const status         = document.getElementById('status');
+  const cInput          = document.getElementById('cInput');
+  const tInput          = document.getElementById('tInput');
+  const gridToggle       = document.getElementById('gridToggle');
+  const arcadeToggle      = document.getElementById('arcadeToggle');
+  const comboEl            = document.getElementById('combo');
+
+  let next = 1, total = 0, phase = 'idle';
+  let combo = 1;
+  let arcadeState = null; // { count, dur } while an arcade run is in progress
+  let currentEls = [];    // elements for the active round, indexed by number
+
+  function setStatus(msg, cls = '') {
+    status.textContent = msg;
+    status.className = cls;
+  }
+
+  function setCombo(n) {
+    combo = n;
+    comboEl.textContent = `${combo}x`;
+  }
+
+  function clamp(val, min, max) { return Math.min(max, Math.max(min, val)); }
+
+  function getCount() { return clamp(parseInt(cInput.value) || 6, 3, 30); }
+  function getDur()   { return clamp(parseFloat(tInput.value) || 1.5, 0.1, 60) * 1000; }
+
+  // Card size scales down as the count grows and with available arena area,
+  // so high counts still fit comfortably without overflowing.
+  function computeCardSize(n, w, h, cellW, cellH) {
+    if (cellW && cellH) {
+      // grid mode: fit inside a cell
+      return clamp(Math.min(cellW, cellH) * 0.72, 30, 76);
+    }
+    const areaPerItem = (w * h) / n;
+    return clamp(Math.sqrt(areaPerItem) * 0.5, 30, 76);
+  }
+
+  // Random placement with dynamic margin scaling: if the requested spacing
+  // can't fit every number in the arena, the margin is shrunk progressively
+  // (rather than silently dropping numbers) so the full count always spawns.
+  function randomPositions(n, w, h, size) {
+    const pad = size / 2 + 8;
+    let margin = size + 14;
+    let positions = [];
+    let shrinkRounds = 0;
+
+    while (positions.length < n && shrinkRounds < 40) {
+      positions = [];
+      let attempts = 0;
+      while (positions.length < n && attempts < 3000) {
+        attempts++;
+        const x = pad + Math.random() * Math.max(1, (w - pad * 2));
+        const y = pad + Math.random() * Math.max(1, (h - pad * 2));
+        if (positions.every(p => Math.hypot(p.x - x, p.y - y) > margin)) {
+          positions.push({x, y});
+        }
+      }
+      if (positions.length < n) {
+        margin *= 0.85;
+        shrinkRounds++;
+      }
+    }
+
+    // Absolute fallback: guarantee the requested count even in extreme cases
+    // (very high count on a tiny screen) by placing any remainder without
+    // a collision check.
+    while (positions.length < n) {
+      const x = pad + Math.random() * Math.max(1, (w - pad * 2));
+      const y = pad + Math.random() * Math.max(1, (h - pad * 2));
+      positions.push({x, y});
+    }
+
+    return positions;
+  }
+
+  // Structured grid layout: even, non-overlapping cells sized to the arena,
+  // with numbers shuffled across cells so placement stays a memory challenge.
+  function gridPositions(n, w, h) {
+    let cols = Math.max(1, Math.round(Math.sqrt(n * (w / h))));
+    cols = Math.min(cols, n);
+    let rows = Math.ceil(n / cols);
+    while (cols * rows < n) cols++;
+
+    const cellW = w / cols;
+    const cellH = h / rows;
+
+    const cells = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (cells.length >= cols * rows) break;
+        cells.push({ x: cellW * c + cellW / 2, y: cellH * r + cellH / 2 });
+      }
+    }
+
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cells[i], cells[j]] = [cells[j], cells[i]];
+    }
+
+    return { positions: cells.slice(0, n), cellW, cellH };
+  }
+
+  function startNextArcadeRound() {
+    setTimeout(() => start(true), 900);
+  }
+
+  async function start(auto = false) {
+    phase = 'showing';
+    startBtn.disabled = true;
+    next = 1;
+    arena.innerHTML = '';
+    currentEls = [];
+
+    let count, dur;
+    if (arcadeToggle.checked) {
+      if (!auto || !arcadeState) {
+        const baseDur = getDur();
+        arcadeState = { count: getCount(), dur: baseDur, baseDur };
+        setCombo(1);
+      }
+      count = arcadeState.count;
+      dur = arcadeState.dur;
+    } else {
+      arcadeState = null;
+      count = getCount();
+      dur = getDur();
+      if (!auto) setCombo(1);
+    }
+
+    total = count;
+    const { width: w, height: h } = arena.getBoundingClientRect();
+
+    let positions, size, cellW, cellH;
+    if (gridToggle.checked) {
+      const grid = gridPositions(total, w, h);
+      positions = grid.positions;
+      cellW = grid.cellW;
+      cellH = grid.cellH;
+      size = computeCardSize(total, w, h, cellW, cellH);
+    } else {
+      size = computeCardSize(total, w, h);
+      positions = randomPositions(total, w, h, size);
+    }
+
+    setStatus(arcadeToggle.checked ? `Memorise... (level ${total})` : 'Memorise...');
+
+    const fontSize = clamp(size * 0.42, 14, 34);
+
+    positions.forEach((p, i) => {
+      const div = document.createElement('div');
+      div.className = 'num';
+      div.textContent = i + 1;
+      div.style.left = p.x + 'px';
+      div.style.top = p.y + 'px';
+      div.style.width = size + 'px';
+      div.style.height = size + 'px';
+      div.style.fontSize = fontSize + 'px';
+      div.dataset.n = i + 1;
+      arena.appendChild(div);
+      currentEls[i + 1] = div;
+    });
+
+    await new Promise(r => setTimeout(r, dur));
+
+    currentEls.forEach(el => { if (el) el.textContent = '?'; });
+    phase = 'guessing';
+    setStatus(`Tap: 1 of ${total}`);
+  }
+
+  // Single delegated listener on the arena avoids re-attaching a new
+  // listener to every card on every round.
+  arena.addEventListener('click', (e) => {
+    if (phase !== 'guessing') return;
+    const el = e.target.closest('.num');
+    if (!el || !arena.contains(el)) return;
+
+    const n = parseInt(el.dataset.n);
+
+    if (n === next) {
+      el.textContent = n;
+      el.classList.add('correct');
+      next++;
+      if (next > total) {
+        phase = 'idle';
+        setCombo(combo + 1);
+        if (arcadeToggle.checked) {
+          setStatus(`Level ${total} clear!`, 'ok');
+          if (arcadeState.dur <= 1000) {
+            arcadeState.dur = arcadeState.baseDur;
+            arcadeState.count = Math.min(30, arcadeState.count + 1);
+          } else {
+            arcadeState.dur = Math.max(1000, arcadeState.dur - 200);
+          }
+          startNextArcadeRound();
+        } else {
+          setStatus('Done!', 'ok');
+          startBtn.disabled = false;
+        }
+      } else {
+        setStatus(`Tap: ${next} of ${total}`);
+      }
+    } else {
+      el.textContent = n;
+      el.classList.add('wrong');
+      setStatus(`Wrong! Needed ${next}`, 'err');
+      setCombo(1);
+      arcadeState = null;
+      phase = 'reveal';
+      setTimeout(() => {
+        currentEls.forEach(e => {
+          if (e && !e.classList.contains('correct')) e.textContent = e.dataset.n;
+        });
+        phase = 'idle';
+        startBtn.disabled = false;
+        setStatus('Press Start to retry');
+      }, 800);
+    }
+  });
+
+  startBtn.onclick = () => start(false);
+</script>
+</body>
+</html>
